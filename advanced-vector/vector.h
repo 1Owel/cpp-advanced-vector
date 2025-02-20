@@ -121,40 +121,11 @@ public:
 
     template <typename... Args>
     iterator Emplace(const_iterator pos, Args&&... args) {
-        size_t num_pos = std::distance(cbegin(), pos);
         if (size_ == Capacity()) { // Вместимости не достаточно
-            size_t ns;
-            if (size_ > 0) {
-                ns = size_ * 2;
-            } else {
-                ns = 1;
-            }
-            RawMemory<T> new_data(ns);
-            // constexpr оператор if будет вычислен во время компиляции
-            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                new (new_data + num_pos) T(std::forward<Args>(args)...);
-                std::uninitialized_move_n(data_.GetAddress(), num_pos, new_data.GetAddress());
-                if (pos != cend()) {
-                    std::uninitialized_move_n(data_ + num_pos, size_ - num_pos, new_data + num_pos + 1);
-                }
-            } else {
-                new (new_data + num_pos) T(std::forward<Args>(args)...);
-                std::uninitialized_copy_n(data_.GetAddress(), num_pos, new_data.GetAddress());
-                if (pos != cend()) {
-                    std::uninitialized_copy_n(data_ + num_pos, size_ - num_pos, new_data + num_pos + 1);
-                }
-            }
-            data_.Swap(new_data);
-            std::destroy_n(new_data.GetAddress(), size_);
+            return EmplaceNotEnoughCapacity(pos, std::forward<Args>(args)...);
         } else { // Достаточно вместимости
-            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                EmplaceWMove(num_pos, std::forward<Args>(args)...);
-            } else {
-                EmplaceWCopy(num_pos, std::forward<Args>(args)...);
-            }
+            return EmplaceEnoughCapacity(pos, std::forward<Args>(args)...);
         }
-        ++size_;
-        return &data_[num_pos];
     }
     
     iterator Erase(const_iterator pos) noexcept /*noexcept(std::is_nothrow_move_assignable_v<T>)*/ {
@@ -273,28 +244,14 @@ public:
             } else {
                 /* Скопировать элементы из rhs, создав при необходимости новые
                    или удалив существующие */
-                size_t current_elem = 0;
                 if (size_ >= rhs.size_) {
-                    for (; current_elem < rhs.size_; current_elem++)
-                    {
-                        data_[current_elem] = rhs[current_elem];
-                    }
-                    for (; current_elem < size_; current_elem++)
-                    {
-                        std::destroy_at(&data_[current_elem]);
-                    }
-                    size_ = rhs.size_;
+                    std::copy(rhs.begin(), rhs.end(), this->begin());
+                    std::destroy_n(begin() + rhs.size_, size_ - rhs.size_);
                 } else {
-                    for (; current_elem < size_; current_elem++)
-                    {
-                        data_[current_elem] = rhs[current_elem];
-                    }
-                    for (; current_elem < rhs.size_; current_elem++)
-                    {
-                        new (data_ + current_elem) T(rhs[current_elem]);
-                    }
-                    size_ = rhs.size_;
+                    std::copy(rhs.begin(), rhs.begin() + size_, this->begin());
+                    std::uninitialized_copy(rhs.begin() + size_, rhs.end(), this->end());
                 }
+                size_ = rhs.size_;
             }
         }
         return *this;
@@ -315,6 +272,48 @@ public:
 private:
     RawMemory<T> data_;
     size_t size_ = 0;
+
+    template <typename... Args>
+    iterator EmplaceNotEnoughCapacity(const_iterator pos, Args&&... args) {
+        size_t num_pos = std::distance(cbegin(), pos);
+        size_t ns;
+        if (size_ > 0) {
+            ns = size_ * 2;
+        } else {
+            ns = 1;
+        }
+        RawMemory<T> new_data(ns);
+        // constexpr оператор if будет вычислен во время компиляции
+        if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+            new (new_data + num_pos) T(std::forward<Args>(args)...);
+            std::uninitialized_move_n(data_.GetAddress(), num_pos, new_data.GetAddress());
+            if (pos != cend()) {
+                std::uninitialized_move_n(data_ + num_pos, size_ - num_pos, new_data + num_pos + 1);
+            }
+        } else {
+            new (new_data + num_pos) T(std::forward<Args>(args)...);
+            std::uninitialized_copy_n(data_.GetAddress(), num_pos, new_data.GetAddress());
+            if (pos != cend()) {
+                std::uninitialized_copy_n(data_ + num_pos, size_ - num_pos, new_data + num_pos + 1);
+            }
+        }
+        data_.Swap(new_data);
+        std::destroy_n(new_data.GetAddress(), size_);
+        ++size_;
+        return &data_[num_pos];
+    }
+
+    template <typename... Args>
+    iterator EmplaceEnoughCapacity(const_iterator pos, Args&&... args) {
+        size_t num_pos = std::distance(cbegin(), pos);
+        if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+            EmplaceWMove(num_pos, std::forward<Args>(args)...);
+        } else {
+            EmplaceWCopy(num_pos, std::forward<Args>(args)...);
+        }
+        ++size_;
+        return &data_[num_pos];
+    }
 
     // Использовать только если capacity позволяет добавить элемент
     template <typename... Args>
